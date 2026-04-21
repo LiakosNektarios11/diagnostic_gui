@@ -1,0 +1,261 @@
+$form.Controls.Add( (New-MenuButton "6 - Accounts & Sessions" 260 220 200 40 {
+    # require admin to open this tool
+    if (-not ([bool]([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole] "Administrator"))) {
+        [System.Windows.Forms.MessageBox]::Show("You must run this as Administrator!","Permission Required",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Warning)
+        return
+    }
+
+    # --- Window ---
+    $win = New-Object System.Windows.Forms.Form
+    $win.Text = "User Accounts & Sessions"
+    $win.Size = New-Object System.Drawing.Size(999,600)
+    $win.StartPosition = "CenterParent"
+    $win.BackColor = [System.Drawing.Color]::Black
+    $win.ForeColor = [System.Drawing.Color]::Lime
+
+    # --- Output TextBox ---
+    $tb = New-Object System.Windows.Forms.TextBox
+    $tb.Multiline = $true
+    $tb.ScrollBars = "Both"
+    $tb.ReadOnly = $true
+    $tb.Font = New-Object System.Drawing.Font("Consolas",10)
+    $tb.BackColor = [System.Drawing.Color]::Black
+    $tb.ForeColor = [System.Drawing.Color]::Lime
+    $tb.Location = New-Object System.Drawing.Point(10, 70)  # 👈 ξεκινά πιο κάτω από τα κουμπιά
+    $tb.Size = New-Object System.Drawing.Size(990, 480)
+    $win.Controls.Add($tb)  
+    
+    # --- Buttons Panel ---
+    $pnl = New-Object System.Windows.Forms.Panel
+    $pnl.Dock = "Top"
+    $pnl.Height = 50
+    $pnl.BackColor = [System.Drawing.Color]::FromArgb(25,25,25)
+    $win.Controls.Add($pnl)
+
+    # --- Output handling ---
+    $out = @("========== USER ACCOUNTS & SESSIONS ==========")
+    function Update-Output {
+        $tb.Text = ($out -join "`r`n")
+        $tb.SelectionStart = $tb.Text.Length
+        $tb.ScrollToCaret()
+    }
+
+    # --- Button style helper ---
+    $btnBack  = [System.Drawing.Color]::FromArgb(40,40,40)
+    $btnFore  = [System.Drawing.Color]::Lime
+    $btnHover = [System.Drawing.Color]::FromArgb(60,60,60)
+    function Set-ButtonStyle($btn) {
+        $btn.FlatStyle = 'Flat'
+        $btn.FlatAppearance.BorderSize = 1
+        $btn.FlatAppearance.BorderColor = [System.Drawing.Color]::Lime
+        $btn.BackColor = $btnBack
+        $btn.ForeColor = $btnFore
+        $btn.Font = New-Object System.Drawing.Font("Consolas",10,[System.Drawing.FontStyle]::Bold)
+        $btn.Add_MouseEnter({ $this.BackColor = $btnHover })
+        $btn.Add_MouseLeave({ $this.BackColor = $btnBack })
+    }
+
+    
+    # Connect to Microsoft Graph (on demand)
+    $btnConnectGraph = New-Object System.Windows.Forms.Button
+    $btnConnectGraph.Text = "Connect Graph"
+    $btnConnectGraph.Width = 140
+    $btnConnectGraph.Location = New-Object System.Drawing.Point(10,10)
+    Set-ButtonStyle $btnConnectGraph
+    $btnConnectGraph.Add_Click({
+        try {
+            if (-not (Get-Module -ListAvailable -Name Microsoft.Graph)) {
+                $out += "`r`nMicrosoft.Graph modules not found. Installing from PSGallery (this may take a few minutes)..."
+                Update-Output
+                Install-Module Microsoft.Graph -Force -AllowClobber -ErrorAction Stop
+            }
+            Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+            # request appropriate scopes for user read/write
+            Connect-MgGraph -Scopes "User.Read.All","User.ReadWrite.All" -ErrorAction Stop
+            $out += "`r`nConnected to Microsoft Graph."
+        } catch {
+            $out += "`r`nFailed to connect to Microsoft Graph: $($_.Exception.Message)"
+        }
+        Update-Output
+    })
+    $pnl.Controls.Add($btnConnectGraph)
+
+    # List Local Users
+    $btnListLocal = New-Object System.Windows.Forms.Button
+    $btnListLocal.Text = "List Local Users"
+    $btnListLocal.Width = 130
+    $btnListLocal.Location = New-Object System.Drawing.Point(160,10)
+    Set-ButtonStyle $btnListLocal
+    $btnListLocal.Add_Click({
+        try {
+            $out = @("--- Local Users ---")
+            $users = Get-LocalUser -ErrorAction Stop | Select-Object Name, Enabled, Description
+            $out += ($users | Format-Table -AutoSize | Out-String)
+        } catch {
+            $out += "`r`nError listing local users: $($_.Exception.Message)"
+        }
+        Update-Output
+    })
+    $pnl.Controls.Add($btnListLocal)
+
+    # List AzureAD / Entra users via Microsoft Graph
+    $btnListGraph = New-Object System.Windows.Forms.Button
+    $btnListGraph.Text = "List AzureAD Users"
+    $btnListGraph.Width = 150
+    $btnListGraph.Location = New-Object System.Drawing.Point(300,10)
+    Set-ButtonStyle $btnListGraph
+    $btnListGraph.Add_Click({
+        try {
+            if (-not (Get-Module Microsoft.Graph.Authentication -ListAvailable)) { throw "Graph module not loaded. Click 'Connect Graph' first." }
+            $out = @("--- AzureAD / Entra Users (Graph) ---")
+            # Get-MgUser -All will retrieve all users in tenant (may be many)
+            $users = Get-MgUser -All | Select-Object DisplayName, UserPrincipalName, AccountEnabled
+            $out += ($users | Format-Table -AutoSize | Out-String)
+        } catch {
+            $out += "`r`nError listing Graph users: $($_.Exception.Message)"
+        }
+        Update-Output
+    })
+    $pnl.Controls.Add($btnListGraph)
+
+    # === Button: List Sessions ===
+    $btnListSessions = New-Object System.Windows.Forms.Button
+    $btnListSessions.Text = "List Sessions"
+    $btnListSessions.Width = 120
+    $btnListSessions.Location = New-Object System.Drawing.Point(460,10)
+    Set-ButtonStyle $btnListSessions
+    $btnListSessions.Add_Click({
+        try {
+                $out = @("--- Active Sessions ---")
+                $q = quser 2>&1
+                if ($q -and ($q -notmatch "No user exists")) {
+                    $out += ($q | Out-String)
+                } else {
+                    $out += "`r`n(No QUSER output - using WMI fallback...)"
+                    $sessions = Get-CimInstance -ClassName Win32_LoggedOnUser -ErrorAction SilentlyContinue
+                    if ($sessions) {
+                        $list = foreach ($session in $sessions) {
+                            try {
+                                $user = ([WMI]$session.Antecedent)
+                                $login = ([WMI]$session.Dependent)
+                                [PSCustomObject]@{
+                                    Domain = $user.Domain
+                                    User   = $user.Name
+                                    LogonType = $login.LogonType
+                                }
+                            } catch {}
+                        }
+                        if ($list) {
+                            $out += ($list | Sort-Object Domain,User | Format-Table -AutoSize | Out-String)
+                        } else {
+                            $out += "`r`nNo active sessions found."
+                        }
+                    }
+                }
+            } catch {
+                $out += "`r`nError listing sessions: $($_.Exception.Message)"
+            }
+            Update-Output
+        })
+    $pnl.Controls.Add($btnListSessions)
+
+    # Enable / Disable (Local or Graph)
+    $btnToggle = New-Object System.Windows.Forms.Button
+    $btnToggle.Text = "Enable/Disable User"
+    $btnToggle.Width = 160
+    $btnToggle.Location = New-Object System.Drawing.Point(600,10)
+    Set-ButtonStyle $btnToggle
+    $btnToggle.Add_Click({
+        $inputName = [Microsoft.VisualBasic.Interaction]::InputBox("Enter username (local) or user principal name (UPN) for AzureAD:", "Enable/Disable User")
+        $action = [Microsoft.VisualBasic.Interaction]::InputBox("Enter action (enable or disable):", "Enable/Disable User")
+        if (-not ($inputName) -or -not ($action)) {
+            $out += "`r`nOperation cancelled or input empty."
+            Update-Output; return
+        }
+        try {
+            $act = $action.ToLower().Trim()
+            if ($inputName -match "@") {
+                # AzureAD user via Microsoft Graph
+                if (-not (Get-Module Microsoft.Graph.Authentication -ListAvailable)) { throw "Not connected to Microsoft Graph. Click 'Connect Graph'." }
+                # find user by userPrincipalName
+                $user = Get-MgUser -UserId $inputName -ErrorAction SilentlyContinue
+                if (-not $user) { throw "Graph user not found: $inputName" }
+                if ($act -eq "enable") { $enabledValue = $true } elseif ($act -eq "disable") { $enabledValue = $false } else { throw "Invalid action. Use enable or disable." }
+                Update-MgUser -UserId $user.Id -AccountEnabled:$enabledValue -ErrorAction Stop
+                $out += "`r`nGraph user '$inputName' set AccountEnabled=$enabledValue"
+            } else {
+                # Local user fallback
+                if ($act -eq "enable") {
+                    Enable-LocalUser -Name $inputName -ErrorAction Stop
+                    $out += "`r`nLocal user '$inputName' enabled."
+                } elseif ($act -eq "disable") {
+                    Disable-LocalUser -Name $inputName -ErrorAction Stop
+                    $out += "`r`nLocal user '$inputName' disabled."
+                } else {
+                    $out += "`r`nInvalid action."
+                }
+            }
+        } catch {
+            $out += "`r`nError modifying user '$inputName': $($_.Exception.Message)"
+        }
+        Update-Output
+    })
+    $pnl.Controls.Add($btnToggle)
+
+    # Force Logoff (robust)
+    $btnLogoff = New-Object System.Windows.Forms.Button
+    $btnLogoff.Text = "Force Logoff"
+    $btnLogoff.Width = 130
+    $btnLogoff.Location = New-Object System.Drawing.Point(780,10)
+    Set-ButtonStyle $btnLogoff
+    $btnLogoff.Add_Click({
+        $sid = [Microsoft.VisualBasic.Interaction]::InputBox("Enter session ID to log off:", "Force Logoff")
+        if (-not $sid) {
+            $out += "`r`nOperation cancelled or session ID empty."
+            Update-Output; return
+        }
+        try {
+            $logoffExe = "$env:SystemRoot\System32\logoff.exe"
+            if (-not (Test-Path $logoffExe)) { throw "logoff.exe not found at $logoffExe" }
+
+            $currentUserShort = ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name -split '\\')[-1]
+            $currentSession = (quser | ForEach-Object {
+                if ($_ -match $currentUserShort) {
+                    ($_ -split '\s+')[2]
+                }
+            }) | Select-Object -First 1
+
+            $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
+
+            if ($sid -eq $currentSession) {
+                # self logoff: use shutdown /l delayed in background
+                [System.Windows.Forms.MessageBox]::Show("Logging off your own session in 3 seconds...","Delayed Logoff",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information)
+                Start-Job -ScriptBlock {
+                    Start-Sleep -Seconds 3
+                    Start-Process -FilePath "$env:SystemRoot\System32\shutdown.exe" -ArgumentList "/l" -WindowStyle Hidden
+                } | Out-Null
+                $out += "`r`nYou will be logged off in 3 seconds..."
+            } else {
+                if (-not $isAdmin) {
+                    [System.Windows.Forms.MessageBox]::Show("Run as Administrator to log off other users.","Permission Required",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Warning)
+                    $out += "`r`nCannot log off other users without admin privileges."
+                } else {
+                    # run logoff with elevation / force
+                    Start-Process -Verb RunAs -FilePath $logoffExe -ArgumentList "$sid /f" -WindowStyle Hidden
+                    $out += "`r`nSession $sid forcibly logged off."
+                }
+            }
+        } catch {
+            $out += "`r`nError logging off session: $($_.Exception.Message)"
+        }
+        Update-Output
+    })
+    $pnl.Controls.Add($btnLogoff)
+
+    # --- finalize ---
+    $win.Controls.Add($tb)
+    $win.Controls.Add($pnl)
+    $win.Controls.SetChildIndex($pnl, 0)
+    Update-Output
+    $win.ShowDialog()
+} ))
