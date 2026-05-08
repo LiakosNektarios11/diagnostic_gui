@@ -1,0 +1,48 @@
+name: Slack notifications
+
+on:
+  pull_request:
+    types: [closed]
+
+  pull_request_review:
+    types: [submitted]
+
+  release:
+    types: [published]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Slack notification
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          EVENT="${{ github.event_name }}"
+
+          # PR MERGED
+          if [ "$EVENT" = "pull_request" ] && \
+             [ "${{ github.event.pull_request.merged }}" = "true" ]; then
+
+            curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"[${{ github.repository }}] PR merged #${{ github.event.pull_request.number }} by ${{ github.event.pull_request.user.login }} - ${{ github.event.pull_request.title }} ${{ github.event.pull_request.html_url }}\"}" \
+            $SLACK_WEBHOOK_URL
+          fi
+
+          # PR APPROVED
+          if [ "$EVENT" = "pull_request_review" ] && \
+             [ "${{ github.event.review.state }}" = "approved" ]; then
+
+            curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"[${{ github.repository }}] PR approved #${{ github.event.pull_request.number }} by ${{ github.event.review.user.login }} - ${{ github.event.pull_request.title }} ${{ github.event.pull_request.html_url }}\"}" \
+            $SLACK_WEBHOOK_URL
+          fi
+
+          # RELEASE PUBLISHED
+          if [ "$EVENT" = "release" ]; then
+
+            curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"[${{ github.repository }}] Release published ${{ github.event.release.tag_name }} by ${{ github.event.release.author.login }} ${{ github.event.release.html_url }}\"}" \
+            $SLACK_WEBHOOK_URL
+          fi
